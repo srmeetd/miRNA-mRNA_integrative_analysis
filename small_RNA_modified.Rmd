@@ -1,0 +1,2001 @@
+---
+title: "miRNA_report"
+date: "16 October 2019"
+output: html_notebook
+---
+
+
+# Experiment design
+
+The design of experiment was the human macrophages polarized with IFNg+LPS i.e., M1 macrophage stimulie (8 samples) and control i.e., M0 macrophages (8 samples). 
+
+The comparison was as follows:
+
+-- What is the difference between the expression of miRNA in M1 and MO.
+
+In this experiment the human macrophages were treated with IFNg+LPS to stimulate M1 macrophages and untreated were M0 macrophages. 
+
+# Pre-processed steps:
+
+-- Quality check of sample was performed using inhouse fastqc pipeline.
+
+-- Adapter were trimmed using cut-adapt.
+
+-- Samples were mapped with small RNA-seq dataset obtained from RNA-central database using bowtie2. The mapping percentage was 70%.
+
+-- reads counts was generated using samtool.
+
+# Check the number percentage of miRNAs and other types of small RNAs.
+
+-- Step one is to import all data and merge all in one dataset.
+
+```{r}
+
+files = list.files(path = "Z:/Shared/Chiara_shared/miRNA_counts/", pattern = ".txt$")
+names(files) = gsub (".bowtie2.bam.txt","",files)
+counts = function(x)
+{
+  name = gsub (".txt","",x)
+  data = read.table(file.path("Z:/Shared/Chiara_shared/miRNA_counts/",x),sep = "\t",as.is = T)
+  column = data [,"V3"]
+  names(column) = data [,"V1"]
+  return(column)  
+}
+data.import=lapply(files, counts)
+data = do.call(cbind, data.import)
+
+```
+
+# Add annotations to the dataset. 
+
+```{r}
+annotations <- read.delim("Z:/Shared/Chiara_shared/miRNA_fasta/id_converion.tsv.gz")
+#data[grepl("URS000017D10B", rownames(data)),]
+tmp = as.data.frame(data)
+rownames(tmp) = gsub ("_9606","",rownames(tmp))
+annotat = base::merge(annotations,tmp,by.x = "rnacentral_id",by.y = "row.names")
+
+
+```
+
+# calculate the percentage of different small RNAs present in dataset
+
+```{r}
+types_miRNAs = as.list(c("ribosomal","piR","tRNA","snoRNA","miR","LINC","snRNA","antisense",
+                         "RNA-Pro","Y RNA","long non-coding RNA"))
+
+perc <- function(x) {
+    total_reads_in_sample = colSums(annotat[3:length(annotat)])
+    goi = annotat[grepl(x, annotat$description),]
+    goi_counts = colSums(goi[3:length(goi)])
+    percent = (goi_counts/total_reads_in_sample)*100
+    per = as.data.frame(percent)
+    names(per) = x
+    return(per)
+}
+
+d = lapply(types_miRNAs,perc)
+dfs = do.call(cbind,d)  
+dfs$others = 100 - rowSums(dfs)
+
+```
+
+# Stackbar chart
+```{r, fig.height=2, fig.width=2}
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+dfs$row <- rownames(dfs)
+#dfs$row = NULL
+#dtf = as.data.frame(colmeans)
+dat2 <- melt(dfs, id.vars = "row")
+p <- dat2 %>%
+  mutate(variable=as.character(variable)) %>%
+  mutate(variable = ifelse(value < 0.5, "others", variable)) %>% 
+  group_by(variable) %>%
+  summarize (value = sum(value)/1600) %>%
+  ggplot(aes(x = reorder(variable,-value), y = value, fill = variable)) + 
+geom_(stat = "identity",position=position_dodge(width=0.5),width=0.5) +
+   xlab("Types of small RNA") +
+   ylab("Average % reads") +
+   theme_bw(base_size=9) +
+  scale_y_continuous(labels=scales::percent_format(accuracy=1))
+p = p+ theme(axis.text.x=element_text(angle=45, hjust=1 , face = "bold", color =  "Black"),
+             legend.position = "none")
+p = p + labs(fill = "Small RNA")
+ggsave("d:/dataset/new_plot_mirna/bar_chart.tiff", p, width=2, height=2, units="in", dpi=600)
+plot(p)
+#tiff("d:/dataset/new_plot_mirna/bar_chart.tiff" , width = 3, height = 2, units = 'in', res = 600)
+#p
+#dev.off()
+```
+
+```{r,fig.height=2, fig.width=3}
+cbbPalette =  c( "#E69F00", "#56B4E9", "#009E73", "#F0E442", 
+                "grey40",  "#0072B2","#D55E00", "#CC79A7","#000000", "white")
+pal_func = function(x) {
+  p <- rep(cbbPalette, ceiling(x/length(cbbPalette)))
+  return (p[1:x])
+}
+q= mutate(dat2, variable=as.character(variable)) %>%
+  mutate(variable = ifelse(value < 0.5, "others", variable)) %>% 
+  mutate(row = sub("trimmed-", "", row)) %>%
+  ggplot() + aes(x=row, y=value, fill=variable) +
+    geom_bar(position="fill", stat="identity") +
+    coord_flip() +
+    theme_bw(base_size=9) +
+    scale_y_continuous(labels=scales::percent_format(accuracy=1), name=NULL) + 
+    scale_x_discrete(name="sample") + 
+    scale_fill_manual(values=cbbPalette)
+
+```
+
+# Read based quality control
+  FASTQC: Per Sequence GC Content
+
+
+```{r pressure, echo=TRUE, fig.cap="cutadapt plot", out.width = '100%'}
+knitr::include_graphics("Z:/Shared/Chiara_shared/cutadapt_plot.png")
+```
+
+# experimental design
+```{r,fig.height=2, fig.width=2.5}
+Grouping = as.data.frame(colnames(data))
+Grouping$design = NA
+Grouping$design = gsub ("*._","",Grouping$`colnames(data)`)
+Grouping$design = gsub ("trimmed-","",Grouping$design)
+colnames(Grouping) = c("Sample","design")
+Grouping$Individuals =  NA
+Grouping$Individuals = gsub ("_.*","",Grouping$Sample)
+Grouping$Individuals = gsub ("trimmed-","",Grouping$Individuals)
+
+```
+# MDS and PCA analysis
+
+```{r, echo =TRUE}
+library (limma)
+library(edgeR)
+library(ggplot2)
+library (factoextra)
+
+datd = data[!rownames(data) == "URS000046AF60_9606", ]
+remove_zero = datd[rowMeans(datd)>5, ]
+count = DGEList (count = remove_zero)
+TMM_count = calcNormFactors(count, method = "TMM")
+CPM_Count = cpm(TMM_count, normalized.lib.sizes=TRUE, log=T, prior.count=1)
+rownames(CPM_Count) = gsub("_9606","",rownames(CPM_Count))
+cpm_count_miRNA_ann = base::merge(CPM_Count,annotations,by.x = "row.names",by.y= "rnacentral_id")
+pca_data = t(CPM_Count)
+wdbc.pr <- prcomp(pca_data, center = TRUE, scale = TRUE)
+tiff("d:/dataset/new_plot_mirna/PCA.tiff" , width = 3, height = 2, units = 'in', res = 600)
+fviz_pca_ind(wdbc.pr, geom.ind = "point", pointshape = 21, 
+             pointsize = 2, 
+             fill.ind = Grouping$design, 
+             #col.ind = "black", 
+             palette = c("#00AFBB", "#E7B800", "#FC4E07"), 
+             addEllipses = FALSE,
+             #label = "var",
+             #col.var = "black",
+             repel = TRUE,
+             legend.title = "Conditions") +
+  theme(text = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8),legend.title  = element_text(size = 8),legend.text = element_text(size = 8))
+  dev.off()
+```
+# Diferential genes
+
+The question was asked here: What the effect of oxLDL+ LPS treatment on miRNAs in macrophage dataset
+
+```{r}
+library (DESeq2)
+
+rownames(Grouping) = Grouping$Sample
+dds <- DESeqDataSetFromMatrix(remove_zero, colData=Grouping, design=~Individuals + design)
+#rlog_data <- rlog(dds)
+#design(dds) <- ~ Individuals + design 
+dss_data <- estimateSizeFactors(dds, locfunc=genefilter::shorth)
+dss_data <- estimateDispersions(dss_data)
+dss_data <- nbinomWaldTest(dss_data)
+Signif <- results(dss_data , alpha = 0.05)
+summary(Signif)
+res = Signif[which(Signif$padj < 0.05 & abs(Signif$log2FoldChange) > 1),]
+
+```
+
+# Filter small RNAs other than miRNAs
+```{r}
+tmp = as.data.frame(Signif)
+rownames(tmp) = gsub("_9606","",rownames(tmp))
+mirbase = read.table("z:/Shared/Chiara_shared/RNA_central_mapp_ID/mirbase.tsv", header= FALSE) 
+filtered_signif = tmp[rownames(tmp)%in%mirbase$V1,]
+filtered_signif$padj_filter = p.adjust(filtered_signif$pvalue, method = "BH")
+filtered_results = filtered_signif[which(filtered_signif$padj_filter < 0.05 & abs(filtered_signif$log2FoldChange) > 1),]
+annotaion_filtered = merge(annotations,filtered_results,by.x = "rnacentral_id",by.y = "row.names")
+annotaion_filtered1 = merge(annotations,filtered_signif,by.x = "rnacentral_id",by.y = "row.names")
+
+```
+
+```{r}
+tiff("d:/dataset/new_plot_mirna/Volcano_plot_miRNAs.tiff" , width = 3.5, height = 3.5, units = 'in', res = 600)
+with(Signif, plot(log2FoldChange, -log10(padj), pch=20, main="Volcano plot", cex=.5, xlab=bquote(~Log[2]~fold~change), ylab=bquote(~-log[10]~Q~value),xlim=c(-6,6),cex.axis=0.4))
+
+with(subset(Signif, padj<0.05 & abs(log2FoldChange)>1), points(log2FoldChange, -log10(padj), pch=20, col="purple", cex=0.5))
+
+abline(v=0, col="black", lty=3, lwd=1.0)
+abline(v=-1, col="black", lty=4, lwd=1.0)
+abline(v=1, col="black", lty=4, lwd=1.0)
+
+dev.off()
+
+
+
+```
+
+# Heatmap and PCA on significant list
+```{r, fig.height=2, fig.width=2.5}
+library(gplots)
+library("factoextra")
+
+Group = Grouping$design
+GroupColors=as.character(Group)
+GroupColors=gsub("M0","Purple",GroupColors)
+GroupColors=gsub("M1","green",GroupColors)
+rownames(res) = gsub("_9606","",rownames(res))
+
+df = CPM_Count[rownames(CPM_Count)%in%rownames(res),]
+datf = df
+colnames(datf) = gsub ("trimmed-","Donar_",colnames(datf))
+
+tiff("d:/dataset/new_plot_mirna/Heatmap_miRNAs_CPM1.tiff" , width = 7, height = 6, units = 'in', res = 600)
+
+#pdf(width=10,height=10,file = "d:/dataset/new_plot_mirna/Heatmap_miRNAs_CPM1.pdf")
+
+my_palette <- colorRampPalette(c("blue", "white","Red"))
+heatmap.2 (as.matrix(datf),trace="none",cexCol = 1,ColSideColors=GroupColors, col = my_palette,
+            dendrogram="column", key = T, key.xlab="Relative expression", scale="row",margins = c(2,20), lhei = c(2,6),  key.title = NA,  density.info = "none",cexRow=0.8)
+
+par(lend = 1)           # square line ends for the color legend
+legend(y=0.7, x=.08, xpd=TRUE,      # location of the legend on the heatmap plot
+       legend = c("MO", "M1"), # category labels
+       col = c("Purple", "green"),  # color key
+       lty= 1,             # line style
+       lwd = 6,cex = .5           # line width
+)
+
+dev.off()
+
+
+tiff("d:/dataset/new_plot_mirna/DE_PCA_miRNA.tiff" , width = 3, height = 2, units = 'in', res = 600)
+pca_data = t(df)
+wdbc.pr <- prcomp(pca_data, center = TRUE, scale = TRUE)
+
+fviz_pca_ind(wdbc.pr, geom.ind = "point", pointshape = 21, 
+             pointsize = 2, 
+             fill.ind = Grouping$design, 
+             col.ind = "black", 
+             palette = c("#00AFBB", "#E7B800", "#FC4E07"), 
+             addEllipses = FALSE,ellipse.type = "t",
+             label = "var",
+             col.var = "black",
+             repel = TRUE,
+             legend.title = "Conditions") +
+  theme(text = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8),legend.title  = element_text(size = 5),legend.text = element_text(size = 5))
+dev.off()
+```
+
+# Heatmap on all miRNAs 
+```{r}
+miRNA = CPM_Count
+rownames(miRNA) = gsub("_9606","",rownames(miRNA))
+dfm = miRNA[rownames(miRNA)%in%annotaion_filtered$rnacentral_id,]
+heatmap.2 (as.matrix(dfm),trace="none",cexCol = 0.8,
+           cexRow=0.8,margins = c(5,20))
+```
+
+# Genes targeted by miRNAs
+
+```{r}
+downregulated_miRNA = annotaion_filtered[annotaion_filtered$log2FoldChange <= 0 ,]
+head (downregulated_miRNA)
+upregulated_miRNA = annotaion_filtered[annotaion_filtered$log2FoldChange > 0 ,]
+head (upregulated_miRNA)
+```
+# Genes targetted differentially expressed miRNAs  
+```{r}
+library(data.table)
+targetscan = read.table("Z:/Shared/Chiara_shared/target_scan/Summary_Counts.all_predictions.txt", sep = "\t", header = T )
+
+Up_regulated_miRNAs = targetscan[targetscan$Representative.miRNA%in%upregulated_miRNA$description,]
+Up_regulated_miRNAs$Transcript.ID = gsub ("\\..*","",Up_regulated_miRNAs$Transcript.ID)
+Up_regulated_miRNAs = subset(Up_regulated_miRNAs, select = c(Transcript.ID,Gene.Symbol,Representative.miRNA))
+head (Up_regulated_miRNAs)
+
+down_regulated_miRNAs = targetscan[targetscan$Representative.miRNA%in%downregulated_miRNA$description,]
+down_regulated_miRNAs$Transcript.ID = gsub ("\\..*","",down_regulated_miRNAs$Transcript.ID)
+down_regulated_miRNAs =subset(down_regulated_miRNAs, select = c(Transcript.ID,Gene.Symbol,Representative.miRNA))
+head (down_regulated_miRNAs)
+
+```
+
+```{r}
+library(plyr)
+library(data.table)
+values = dlply (Up_regulated_miRNAs,"Representative.miRNA")
+
+miRNs = function(x)
+{
+  df = as.data.frame(x)
+  colnames(df) = colnames(Up_regulated_miRNAs)
+  Transcript_id = paste0(df$Transcript.ID,collapse = ",")
+  gene_symbol = paste0(df$Gene.Symbol,collapse = ",")
+  df$Transcript.ID = NULL
+  df$Gene.Symbol = NULL
+  dfs = unique(df)
+  dfs$Transcript =  Transcript_id
+  dfs$Gene_symbol = gene_symbol
+  return(dfs)
+  
+}
+
+dat = lapply(values, miRNs)
+up_regulated_miRNA_trget_targetscan = do.call(rbind,dat)
+up_regulated_miRNA_trget_targetscan$counts_genes <- sapply(strsplit(up_regulated_miRNA_trget_targetscan$Gene_symbol,','), uniqueN)
+up_regulated_miRNA_trget_targetscan1 = up_regulated_miRNA_trget_targetscan[up_regulated_miRNA_trget_targetscan$counts_genes > 10,]
+```
+
+
+
+#########RNA SEQ###################################
+
+# RNA-seq analysis.
+-- Cell types: Macrophages.
+-- number of samples: 16
+-- Groupinf = Treated with LPS+IFg (8 samples) and M0 i.e., untreated (8 samples)
+
+# Preprocessing steps:
+-- Quality was checked by FASTQC.
+-- Adapater were trimmed by trimmomatic
+-- Fastq files were mapped against human genome (version:Hg 38).
+-- STAR mapper was used for mapping
+-- Approximat percentage of mapping all samples were 90%.
+-- files were further qunatified using salmon-quant.
+
+# In this analysis we are focusing on the question related to miRNA analysis(find the script located in Shared/immunity_metabolism/Chiara/scripts).
+-- The question was asked: The differential expression genes from RNA-seq is targetted my differential expressed miRNAs.
+-- Hence, downregulated miRNAs targetting up-regulated mRNAs and up regulated miRNAs targetting down-regulating mRNAs.
+
+# The AIM of this analysis
+-- To find the regulatory miRNAs by looking at the number of mRNAs it targetted.
+-- The gene enrichment analysis of this mRNAs will answer the question related importance of miRNAs in macrophages differentiations.
+
+
+
+```{r tx2gene}
+library(tximportData)
+library(readr)
+library(tximport)
+library (rjson)
+library (limma)
+library (edgeR)
+library (gplots)
+library(GenomicFeatures)
+TxDb <- makeTxDbFromGFF(file ="Z:/Shared/Chiara_shared/Kajus_RNA_seq/quantification.dir/geneset_all.gtf")
+
+k <- keys(TxDb, keytype = "TXNAME")
+tx2gene <- AnnotationDbi::select(TxDb, k, "GENEID", "TXNAME")
+```
+
+```{r tximport}
+library(tximport)
+workingdir = "Z:/Shared/Chiara_shared/Kajus_RNA_seq/quantification.dir/"
+file = list.files(path ="Z:/Shared/Chiara_shared/Kajus_RNA_seq/quantification.dir/", pattern=".sf$")
+Files=unlist(file)
+name = gsub(".sf", "",Files)
+names(Files) <- name
+txi <- tximport(paste0(workingdir,Files), type = "salmon", tx2gene = tx2gene,countsFromAbundance = "lengthScaledTPM")
+df = txi$counts
+df_tmp = txi$abundance
+colnames(df) = name
+
+txi1 <- tximport(paste0(workingdir,Files), type = "salmon", txOut = TRUE)
+LPS = txi1$counts
+df_tmp = txi1$abundance
+colnames(LPS) = name
+
+
+```
+
+```{r CPM_counts}
+lps_group = read.csv("Z:/Shared/Chiara_shared/Kajus_RNA_seq/quantification.dir/Group_LPS.csv")
+lps_group1 = lps_group[grep("11|17|29|12|18|48",lps_group$Sample),] 
+lps_group2 = lps_group[!grepl("11|17|29|12|18|48",lps_group$Sample),] 
+
+remove_zero = LPS[rowSums(LPS)>0, ] 
+
+count = DGEList (count = remove_zero) ##
+TMM_count = calcNormFactors(count, method = "TMM")
+
+#CPM_Count_lps = cpm(TMM_count, normalized.lib.sizes=TRUE, log=T, prior.count=1)
+#lps_mo = CPM_Count_lps[,grep("11|17|29|12|18|48",colnames(CPM_Count_lps))]
+
+#colnames(lps_mo) = lps_group1$Group
+
+#lps_mo1 = CPM_Count_lps[,!grepl("11|17|29|12|18|48",colnames(CPM_Count_lps))]
+#colnames(lps_mo1) = lps_group2$Group
+#colnames(lps_mo) = gsub ("0","0_rs7755",colnames(lps_mo))
+#colnames(lps_mo) = gsub ("1","1_rs7755",colnames(lps_mo))
+#CPM_Count_lps_OE = lps_mo[grep("CPM_Count_lps",rownames(lps_mo)),]
+#ENST00000464213_lps_mo1 = lps_mo1[grep("ENST00000447544",rownames(lps_mo1)),]
+#splot_1 = split (t(ENST00000464213_lps_mo1),names(ENST00000464213_lps_mo1))
+#splot_2 = split (t(ENST00000464213_OE),names(ENST00000464213_OE))
+
+#stak1 = stack (splot_1)
+#stak2 = stack(splot_2)
+#stak = rbind (stak1,stak2)
+
+#stak %>%
+#     arrange(match(ind, c("M0", "M0_rs7755", "M1","M1_rs7755"))) -> s
+#colnames(s) = c("Log_CPM_values","Samples")
+#s$information = gsub ("M0_rs7755|M1_rs7755","Hetrozygous",s$Samples)
+#s$information = gsub ("M0|M1","Homozygous",s$information)
+#s$Samples = gsub ("\\_.*","",s$Samples)
+
+#P = ggplot (s, aes(x = Samples,y = Log_CPM_values,color = information)) + geom_point(size = 1.5, stroke = 2) + theme(panel.background = element_blank()) + theme(axis.text.x = element_text(size=10,color =  "black"),axis.text.y = element_text(size = 10, color = "black"))
+
+#tiff("d:/dataset/new_plot_mirna/gplots.tiff" , width = 3, height = 3, units = 'in', res = 600)
+
+#ggplot (s, aes(x = Samples,y = Log_CPM_values,color = information)) + 
+#  geom_point(size = 1.5, stroke = 1, position=position_dodge(width=0.5)) + 
+#  stat_summary(fun.data=mean_se, geom="pointrange", position=position_dodge(width=1),  shape=3, fatten=3) +
+#  theme_classic(base_size=8) + 
+#  scale_y_continuous(name="Log CPM") +
+#  scale_color_discrete(name=NULL, labels=c("AG/GG", "AA")) +
+#  theme(panel.background = element_blank()) +
+#  theme(legend.position = "top", axis.text.x = element_text(size=10,color =  "black"),
+#        axis.text.y = element_text(size = 10, color = "black"))
+
+#print(P)
+
+#ggsave(filename = "d:/dataset/new_plot_mirna/RNA_seq_feb/",plot= P, width = 3, height =3, units = "in", dpi = 600)
+
+#ggsave(filename = "z:/Shared/Alleic_imabalnce_super_Regs_miRNAs/cd36_ENSMBLE.jpg",plot= P, 
+ #      width = 3, height =3, units = "in", dpi = 600)
+  
+#mean = tapply(stripchart$Log_CPM_values, stack_sorted$Samples, mean)
+#points(1:4, mean, pch="-", cex=3, col="RED")
+
+```
+```{r}
+
+remove_zero = df[rowSums(df)>0, ] 
+
+count = DGEList (count = remove_zero) ##
+TMM_count = calcNormFactors(count, method = "TMM")
+
+CPM_Count_lps = cpm(TMM_count, normalized.lib.sizes=TRUE, log=T, prior.count=1)
+
+```
+
+```{r,fig.height=2, fig.width=2.5}
+library(factoextra)
+tiff("d:/dataset/new_plot_mirna/CPM_PCA_RNA.tiff" , width = 3, height = 2, units = 'in', res = 600)
+pca_data = t(CPM_Count_lps)
+wdbc.pr <- prcomp(pca_data, center = TRUE, scale = TRUE)
+
+fviz_pca_ind(wdbc.pr, geom.ind = "point", pointshape = 21, 
+             pointsize = 2, 
+             fill.ind = lps_group$Group, 
+             col.ind = "black", 
+             palette = "jco", 
+             addEllipses = FALSE,
+             label = "var",
+             col.var = "black",
+             repel = TRUE,
+             legend.title = "Conditions") +
+  theme(text = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8),legend.title  = element_text(size = 8),legend.text = element_text(size = 8))
+dev.off()
+```
+
+# Differetial expression analysis using DESEQ2
+```{r DESEQ2}
+library (DESeq2)
+
+rownames(lps_group) = lps_group$Sample
+lps_dds <- DESeqDataSetFromTximport(txi, lps_group, design=~Group)
+
+#rlog_data <- rlog(dds)
+#design(dds) <- ~ Individuals + design 
+lps_data <- estimateSizeFactors(lps_dds, locfunc=genefilter::shorth)
+lps_data <- estimateDispersions(lps_data)
+lps_data <- nbinomWaldTest(lps_data)
+results = results(lps_data)
+Signif_lps <- results(lps_data , alpha = 0.05)
+summary(Signif_lps)
+res_lps = Signif_lps[which(Signif_lps$padj < 0.05 & abs(Signif_lps$log2FoldChange) > 1),]
+res_lps_cpm = CPM_Count_lps[rownames(CPM_Count_lps)%in%rownames(res_lps),]
+downregulated_RNAs = res_lps[res_lps$log2FoldChange <= 0 ,]
+upregulated_RNAs = res_lps[res_lps$log2FoldChange > 0 ,]
+
+write.csv (downregulated_RNAs,"Kajus_downregulated_mRNA.csv")
+write.csv (upregulated_RNAs,"Kajus_upwnregulated_mRNA.csv")
+getwd()
+```
+```{r}
+tiff("d:/dataset/new_plot_mirna/Volcano_plot_genes.tiff" , width = 3.5, height = 3.5, units = 'in', res = 600)
+with(Signif_lps, plot(log2FoldChange, -log10(padj), pch=20, main="Volcano plot", cex=0.5, xlab=bquote(~Log[2]~fold~change), ylab=bquote(~-log[10]~Q~value),xlim=c(-16,16),cex.axis=0.4))
+
+with(subset(Signif_lps, padj<0.05 & abs(log2FoldChange)>1), points(log2FoldChange, -log10(padj), pch=16, col="purple",bg = "yellow", cex=0.5))
+
+abline(v=0, col="black", lty=3, lwd=1.0)
+abline(v=-1, col="black", lty=4, lwd=1.0)
+abline(v=1, col="black", lty=4, lwd=1.0)
+dev.off()
+```
+
+```{r}
+library(factoextra)
+pca_data = t(as.matrix(res_lps_cpm))
+wdbc.pr <- prcomp(pca_data, center = TRUE, scale = TRUE)
+
+tiff("d:/dataset/new_plot_mirna/DE_CPM_PCA_RNA.tiff" , width = 3, height = 2, units = 'in', res = 600)
+fviz_pca_ind(wdbc.pr, geom.ind = "point", pointshape = 21, 
+             pointsize = 2, 
+             fill.ind = lps_group$Group, 
+             col.ind = "black", 
+             palette = "jco", 
+             addEllipses = FALSE,
+             #label = "var",
+             col.var = "black",
+             repel = TRUE,
+             legend.title = "Conditions") +
+  theme(text = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8),legend.title  = element_text(size = 5),legend.text = element_text(size = 5))
+dev.off()
+```
+
+# Add transcript ID and gene symbol on signicicant list of RNAseq from lps_ifg
+
+```{r add annnotations}
+library (biomaRt)
+
+ensembl = useEnsembl(biomart="ensembl", dataset="hsapiens_gene_ensembl")
+ensembl_wt = as.character(unlist(rownames(res_lps)))
+res_wt = getBM(attributes= c('ensembl_gene_id','ensembl_transcript_id','hgnc_symbol'), 
+               filters = 'ensembl_gene_id', 
+               values = ensembl_wt, 
+               mart = ensembl)
+
+signif_ign = merge(as.data.frame(res_lps),res_wt,by.x = "row.names",by.y = "ensembl_gene_id")
+rownames(signif_ign) = make.names(signif_ign$ensembl_transcript_id,unique = T)
+
+
+```
+
+```{r}
+downregulated_RNAs_lps = merge(as.data.frame(downregulated_RNAs),res_wt,by.x = "row.names",by.y = "ensembl_gene_id")
+
+upregulated_RNAs_lps = merge (as.data.frame(upregulated_RNAs),res_wt,by.x = "row.names",by.y = "ensembl_gene_id")
+
+
+
+write.csv (downregulated_RNAs_lps,"Kajus_downregulated_mRNA.csv")
+write.csv (upregulated_RNAs_lps,"Kajus_upnregulated_mRNA.csv")
+
+```
+
+# Analysis is to check the transcripts from RNA-Seq targetted by differentially expressed miRNAs 
+ 1. Downregulated mRNAs targetted by miRNAs downregulated and upregulated respectivelly
+2.  Upregulated miRNAs targetted by mRNAs downregulated and upregulated respectivelly
+
+
+```{r}
+
+up_RNAslps_down_trgt_miRNAs = upregulated_RNAs_lps [upregulated_RNAs_lps$ensembl_transcript_id%in%down_regulated_miRNAs$Transcript.ID,]
+
+write.csv(up_RNAslps_down_trgt_miRNAs,"up_RNAslps_down_trgt_miRNAs.csv")
+
+up_RNAslps_up_trgt_miRNAs = upregulated_RNAs_lps [upregulated_RNAs_lps$ensembl_transcript_id%in%Up_regulated_miRNAs$Transcript.ID,]
+
+
+downregulated_RNAs_lps_up_regualted_trgt_miRNAs = downregulated_RNAs_lps[downregulated_RNAs_lps$ensembl_transcript_id%in%Up_regulated_miRNAs$Transcript.ID,]
+write.csv(downregulated_RNAs_lps_up_regualted_trgt_miRNAs,"downregulated_RNAs_lps_up_regualted_trgt_miRNAs.csv")
+
+downregulated_RNAs_lps_down_regualted_trgt_miRNAs = downregulated_RNAs_lps[downregulated_RNAs_lps$ensembl_transcript_id%in%down_regulated_miRNAs$Transcript.ID,]
+
+```
+
+```{r}
+
+up_RNAslps_down_trgt_miRNAs_add_trgt_miRNAs = merge(up_RNAslps_down_trgt_miRNAs,down_regulated_miRNAs,by.x = "hgnc_symbol",by.y = "Gene.Symbol")
+
+up_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs = merge(up_RNAslps_up_trgt_miRNAs,Up_regulated_miRNAs,by.x = "hgnc_symbol",by.y = "Gene.Symbol")
+
+down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs = merge(downregulated_RNAs_lps_up_regualted_trgt_miRNAs,Up_regulated_miRNAs,by.x = "hgnc_symbol",by.y = "Gene.Symbol")
+
+down_RNAslps_down_trgt_miRNAs_add_trgt_miRNAs = merge(downregulated_RNAs_lps_up_regualted_trgt_miRNAs,down_regulated_miRNAs,by.x = "hgnc_symbol",by.y = "Gene.Symbol")
+
+```
+
+
+```{r}
+library(plyr)
+library(data.table)
+values = dlply (up_RNAslps_down_trgt_miRNAs_add_trgt_miRNAs,"hgnc_symbol")
+
+miRNs = function(x)
+{
+  df = as.data.frame(x)
+  colnames(df) = colnames(up_RNAslps_down_trgt_miRNAs_add_trgt_miRNAs)
+  miRNAs_name = paste0(df$Representative.miRNA,collapse = ",")
+  df$Representative.miRNA = NULL
+  dfs = unique(df)
+  dfs$miRNAs = miRNAs_name 
+  return(dfs)
+  
+}
+
+dat = lapply(values, miRNs)
+up_RNAslps_trgted_miRNAs = do.call(rbind,dat)
+up_RNAslps_trgted_miRNAs$counts_miRNAs <- sapply(strsplit(up_RNAslps_trgted_miRNAs$miRNAs,','), uniqueN)
+up_RNAslps_trgted_miRNAs1 = up_RNAslps_trgted_miRNAs[up_RNAslps_trgted_miRNAs$counts_miRNAs > 10,]
+
+```
+```{r}
+library(tidyr)
+target_matrix <-
+  up_RNAslps_trgted_miRNAs %>%
+  separate_rows(miRNAs, sep=",") %>% 
+  select(hgnc_symbol, miRNAs) %>%
+  mutate(target=1) %>% 
+  distinct() %>%
+  pivot_wider(id_cols=hgnc_symbol, names_from=miRNAs, values_from=target, values_fill=0)
+```
+
+```{r}
+library(plyr)
+library(data.table)
+values = dlply (down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs,"hgnc_symbol")
+
+miRNs = function(x)
+{
+  df = as.data.frame(x)
+  colnames(df) = colnames(down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs)
+  miRNAs_name = paste0(df$Representative.miRNA,collapse = ",")
+  df$Representative.miRNA = NULL
+  dfs = unique(df)
+  dfs$miRNAs = miRNAs_name 
+  return(dfs)
+  
+}
+
+dat = lapply(values, miRNs)
+Down_RNAslps_trgted_miRNAs = do.call(rbind,dat)
+Down_RNAslps_trgted_miRNAs$count_miRNAs <- sapply(strsplit(Down_RNAslps_trgted_miRNAs$miRNAs,','), uniqueN)
+Down_RNAslps_trgted_miRNAs1 = Down_RNAslps_trgted_miRNAs[Down_RNAslps_trgted_miRNAs$count_miRNAs >= 12,]
+
+```
+
+
+
+
+```{r}
+library (biomaRt)
+
+ensembl = useEnsembl(biomart="ensembl", dataset="hsapiens_gene_ensembl")
+ensembl_wt = as.character(unlist(rownames(CPM_Count_lps)))
+res_wt = getBM(attributes= c('ensembl_gene_id','ensembl_transcript_id','hgnc_symbol'), 
+               filters = 'ensembl_gene_id', 
+               values = ensembl_wt, 
+               mart = ensembl)
+masterlist =  merge (CPM_Count_lps,res_wt,by.x = "row.names",by.y = "ensembl_gene_id")
+pre_background = merge(annotat,targetscan, by.y = "Representative.miRNA",by.x = "description")
+pre_background$Transcript.ID = gsub("\\..*","",pre_background$Transcript.ID)
+background_step1 = merge (pre_background,masterlist,by.x = "Transcript.ID",by.y = "ensembl_transcript_id" )
+ 
+```
+
+```{r}
+library(GenomicFeatures)
+library(dplyr)
+
+TxDb <- makeTxDbFromGFF(file = "C:/Users/Sumeet/Desktop/Deng/Homo_sapiens.GRCh38.93.gtf.gz")
+threeUTRs          <- threeUTRsByTranscript(TxDb, use.names=TRUE)
+length_threeUTRs   <- width(ranges(threeUTRs))
+the_lengths        <- as.data.frame(length_threeUTRs)
+the_lengths        <- the_lengths %>% group_by(group, group_name) %>% dplyr::summarise(sum(value))
+the_lengths        <- unique(the_lengths[,c("group_name", "sum(value)")])
+colnames(the_lengths) <- c("trans_id", "3_UTR_Length")
+background = merge (background_step1,the_lengths,by.x = "Transcript.ID",by.y = "trans_id")
+down_Regs_enrich = merge(down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs, background, by = "Row.names")
+up_Regs_enrich = merge(up_RNAslps_down_trgt_miRNAs_add_trgt_miRNAs, background, by = "Row.names")
+
+```
+
+# GOSEQ analysis down_regs_enrich (down regs mRNA and up regs miRNAs)
+```{r}
+library(goseq)
+library(KEGGREST)
+library(plyr)
+
+macrophages_targted_genes = unique(background$Row.names)
+downregs_mRNA_lps_upregs_miRNAs = unique(subset(down_Regs_enrich, select =  Row.names))
+gene_name = as.data.frame(macrophages_targted_genes)
+colnames(gene_name) = "ID"
+colnames(downregs_mRNA_lps_upregs_miRNAs) = "ensembl_transcript_id"
+downregs_mRNA_lps_upregs_miRNAs$value = 1
+tmp = merge (gene_name,downregs_mRNA_lps_upregs_miRNAs, by.x = "ID", by.y = "ensembl_transcript_id", all = TRUE)
+tmp[is.na(tmp)] <- 0
+gene = as.integer(tmp[,2])
+names(gene) = tmp$ID
+gene = gene[!duplicated(names(gene))]
+bias_data = background[background$Row.names%in% names(gene),]
+bias_data = subset(bias_data, select = c("Row.names","3_UTR_Length"))
+bias_data = bias_data[!duplicated(bias_data$Row.names),]
+rownames(bias_data) = bias_data$Row.names
+bias_data$Row.names = NULL
+colnames(bias_data) = NULL
+bias_data1 = as.vector(t(bias_data))
+names(bias_data1) = rownames(bias_data) 
+
+genes = gene[names(gene)%in%names(bias_data1)]
+
+```
+
+```{r}
+pwf=nullp(genes,bias.data = bias_data1)
+
+GO.counts=goseq(pwf,"hg19","ensGene")
+
+getGeneLists <- function(pwf, goterms, genome, ids){
+  gene2cat <- getgo(rownames(pwf), genome, ids)
+  cat2gene <- split(rep(names(gene2cat), sapply(gene2cat, length)),
+                    unlist(gene2cat, use.names = FALSE))
+  out <- list()
+  for(term in goterms){
+    tmp <- pwf[cat2gene[[term]],]
+    tmp <- rownames(tmp[tmp$DEgenes > 0, ])
+    out[[term]] <- tmp
+  }
+  out
+}
+
+goterms <- GO.counts$category 
+goList <- getGeneLists(pwf, goterms, "hg38", "ensGene")
+GO.counts$EnsemblID <- sapply(GO.counts$category, function(x) goList[[x]])
+GO.counts <- GO.counts[GO.counts$numInCat > 10,]
+GO.counts$Enrich <- (GO.counts$numDEInCat/sum(gene))/(GO.counts$numInCat/length(gene))
+GO.counts$FDR <- p.adjust(GO.counts$over_represented_pvalue, method="BH")
+downregsmRNA_upregs_miRNAs_GO = GO.counts
+```
+```{r}
+   en2eg=as.list(org.Hs.egENSEMBL2EG)
+ # Get the mapping from Entrez 2 KEGG
+   eg2kegg=as.list(org.Hs.egPATH)
+ # Define a function which gets all unique KEGG IDs
+   # associated with a set of Entrez IDs
+   grepKEGG=function(id,mapkeys){unique(unlist(mapkeys[id],use.names=FALSE))}
+ # Apply this function to every entry in the mapping from
+   # ENSEMBL 2 Entrez to combine the two maps
+  kegg=lapply(en2eg,grepKEGG,eg2kegg)
+ head(kegg)
+ pwf=nullp(genes,bias.data = bias_data1)
+ KEGG=goseq(pwf,gene2cat=kegg)
+ KEGG$NAME = KEGG$category
+ KEGG$NAME = paste0('hsa', KEGG$NAME)
+ KEGG <- as.data.frame(KEGG[KEGG$numDEInCat > 0, ])
+ KEGG <- as.data.frame(KEGG[KEGG$numInCat > 10, ])
+ allKEGGs <- stack(kegg)
+ allKEGG_sig <- allKEGGs[allKEGGs$values %in% KEGG$category,]
+ value = dlply(allKEGG_sig, "values")
+
+
+ KEGG$description <- sapply(KEGG$category, function(x) tryCatch(keggGet(paste0("hsa",x))[[1]]$NAME,
+                                                                error = function(e) NA))
+ add_genes <- function(kegg_pathway, mappings, sig_genes) {
+  
+    pathway_genes <- mappings[[kegg_pathway]]$ind
+    sign_in_pathway = intersect(pathway_genes, sig_genes)
+    collapsed_ids <- paste(sign_in_pathway, collapse=",")
+    return (collapsed_ids)
+ }
+ 
+ KEGG$genes <- sapply(KEGG$category, add_genes, value, names(gene)[gene>0])
+ KEGG$Enrich <- (KEGG$numDEInCat/sum(gene))/(KEGG$numInCat/length(gene))
+ KEGG$FDR <- p.adjust(KEGG$over_represented_pvalue, method="BH")
+ #kegg_r = KEGG_df[- grep("NA", KEGG_df$miRNAs),]
+ kegg_r <- KEGG[KEGG$numInCat > 10,]
+ kegg_r <- kegg_r[kegg_r$numDEInCat > 10,]
+ kegg_r$FDR <- p.adjust(kegg_r$over_represented_pvalue, method="BH")
+ downregsmRNA_upregs_miRNAs_KEGG = kegg_r
+ 
+```
+
+# GOSEQ plot analysis down_regs_enrich
+```{r}
+GO.counts  %>% 
+    top_n(10, wt=-FDR) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, 
+               y=term, 
+               colour=FDR, 
+               size=numDEInCat)) +
+        geom_point() +
+        expand_limits(x=0) +
+        labs(x="Hits (%)", y="GO term", colour="FDR", size="Count")
+```
+
+
+# KEGG plot analysis down_regs_enrich
+
+```{r}
+kegg_r %>% 
+    top_n(10, wt=-FDR) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, 
+               y=description, 
+               colour=FDR, 
+               size=numDEInCat)) +
+       geom_point() +
+        expand_limits(x=0) +
+        labs(x="Hits (%)", y="GO term", colour="FDR", size="Count")
+remove(kegg_r)
+```
+
+# GOSEQ analysis UP_regs_enrich (up regulated mRNAs and downregulated miRNAs)
+```{r}
+library(goseq)
+library(KEGGREST)
+library(plyr)
+
+macrophages_targted_genes = unique(background$Row.names)
+up_mRNA_lps_upregs_miRNAs = unique(subset(up_Regs_enrich, select =  Row.names))
+gene_name = as.data.frame(macrophages_targted_genes)
+colnames(gene_name) = "ID"
+colnames(up_mRNA_lps_upregs_miRNAs) = "ensembl_transcript_id"
+up_mRNA_lps_upregs_miRNAs$value = 1
+tmp = merge (gene_name,up_mRNA_lps_upregs_miRNAs, by.x = "ID", by.y = "ensembl_transcript_id", all = TRUE)
+tmp[is.na(tmp)] <- 0
+gene = as.integer(tmp[,2])
+names(gene) = tmp$ID
+gene = gene[!duplicated(names(gene))]
+bias_data = background[background$Row.names%in% names(gene),]
+bias_data = subset(bias_data, select = c("Row.names","3_UTR_Length"))
+bias_data = bias_data[!duplicated(bias_data$Row.names),]
+rownames(bias_data) = bias_data$Row.names
+bias_data$Row.names = NULL
+colnames(bias_data) = NULL
+bias_data1 = as.vector(t(bias_data))
+names(bias_data1) = rownames(bias_data) 
+
+genes = gene[names(gene)%in%names(bias_data1)]
+
+pwf=nullp(genes,bias.data = bias_data1)
+```
+
+
+```{r}
+GO.counts=goseq(pwf,"hg19","ensGene")
+
+getGeneLists <- function(pwf, goterms, genome, ids){
+  gene2cat <- getgo(rownames(pwf), genome, ids)
+  cat2gene <- split(rep(names(gene2cat), sapply(gene2cat, length)),
+                    unlist(gene2cat, use.names = FALSE))
+  out <- list()
+  for(term in goterms){
+    tmp <- pwf[cat2gene[[term]],]
+    tmp <- rownames(tmp[tmp$DEgenes > 0, ])
+    out[[term]] <- tmp
+  }
+  out
+}
+
+goterms <- GO.counts$category 
+goList <- getGeneLists(pwf, goterms, "hg38", "ensGene")
+GO.counts$EnsemblID <- sapply(GO.counts$category, function(x) goList[[x]])
+GO.counts <- GO.counts[GO.counts$numInCat > 10,]
+GO.counts$Enrich <- (GO.counts$numDEInCat/sum(gene))/(GO.counts$numInCat/length(gene))
+GO.counts$FDR <- p.adjust(GO.counts$over_represented_pvalue, method="BH")
+upregsmRNA_downregs_miRNAs_GO = GO.counts
+
+```
+
+```{r}
+   en2eg=as.list(org.Hs.egENSEMBL2EG)
+ # Get the mapping from Entrez 2 KEGG
+   eg2kegg=as.list(org.Hs.egPATH)
+ # Define a function which gets all unique KEGG IDs
+   # associated with a set of Entrez IDs
+   grepKEGG=function(id,mapkeys){unique(unlist(mapkeys[id],use.names=FALSE))}
+ # Apply this function to every entry in the mapping from
+   # ENSEMBL 2 Entrez to combine the two maps
+  kegg=lapply(en2eg,grepKEGG,eg2kegg)
+ head(kegg)
+ pwf=nullp(genes,bias.data = bias_data1)
+KEGG=goseq(pwf,gene2cat=kegg)
+KEGG$NAME = KEGG$category
+KEGG$NAME = paste0('hsa', KEGG$NAME)
+KEGG <- as.data.frame(KEGG[KEGG$numDEInCat > 0, ])
+KEGG <- as.data.frame(KEGG[KEGG$numInCat > 10, ])
+allKEGGs <- stack(kegg)
+allKEGG_sig <- allKEGGs[allKEGGs$values %in% KEGG$category,]
+
+value = dlply(allKEGG_sig, "values")
+  
+ KEGG$description <- sapply(KEGG$category, function(x) tryCatch(keggGet(paste0("hsa",x))[[1]]$NAME,
+                                                                error = function(e) NA))
+ add_genes <- function(kegg_pathway, mappings, sig_genes) {
+  
+    pathway_genes <- mappings[[kegg_pathway]]$ind
+    sign_in_pathway = intersect(pathway_genes, sig_genes)
+    collapsed_ids <- paste(sign_in_pathway, collapse=",")
+    return (collapsed_ids)
+ }
+ 
+ KEGG$genes <- sapply(KEGG$category, add_genes, value, names(gene)[gene>0])
+ KEGG$Enrich <- (KEGG$numDEInCat/sum(gene))/(KEGG$numInCat/length(gene))
+ KEGG$FDR <- p.adjust(KEGG$over_represented_pvalue, method="BH")
+ #kegg_r = KEGG_df[- grep("NA", KEGG_df$miRNAs),]
+ kegg_r <- KEGG[KEGG$numInCat > 10,]
+ kegg_r <- kegg_r[kegg_r$numDEInCat > 10,]
+ kegg_r$FDR <- p.adjust(kegg_r$over_represented_pvalue, method="BH")
+ upregsmRNA_downregs_miRNAs_KEGG = kegg_r
+
+
+```
+
+# GOSEQ plot analysis UP regs_enrich
+```{r}
+GO.counts  %>% 
+    top_n(10, wt=-FDR) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, 
+               y=term, 
+               colour=FDR, 
+               size=numDEInCat)) +
+        geom_point() +
+        expand_limits(x=0) +
+        labs(x="Hits (%)", y="GO term", colour="FDR", size="Count")
+```
+
+
+# KEGG plot analysis UP_regs_enrich
+
+```{r}
+kegg_r %>% 
+    top_n(10, wt=-FDR) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, 
+               y=description, 
+               colour=FDR, 
+               size=numDEInCat)) +
+       geom_point() +
+        expand_limits(x=0) +
+        labs(x="Hits (%)", y="GO term", colour="FDR", size="Count")
+```
+
+```{r}
+library (ComplexHeatmap)
+library(circlize)
+t = downregsmRNA_upregs_miRNAs_KEGG[downregsmRNA_upregs_miRNAs_KEGG$FDR<0.12,]
+s = upregsmRNA_downregs_miRNAs_KEGG[upregsmRNA_downregs_miRNAs_KEGG$FDR< 0.12, ]
+downregsmRNA_upregs_miRNAs_KEGG_selected = subset (t, select = c("description","FDR"))
+
+upregsmRNA_downregs_miRNAs_KEGG_selected = subset(s,select = c("description","FDR"))
+upregsmRNA_downregs_miRNAs_KEGG_selected$description = gsub("- Homo sapiens (human)","",upregsmRNA_downregs_miRNAs_KEGG_selected$description,fixed=TRUE)
+
+downregsmRNA_upregs_miRNAs_KEGG_selected$description = gsub("- Homo sapiens (human)","",downregsmRNA_upregs_miRNAs_KEGG_selected$description,fixed=TRUE)
+
+KEGG = merge (upregsmRNA_downregs_miRNAs_KEGG_selected,downregsmRNA_upregs_miRNAs_KEGG_selected,by = "description", all = T)
+
+colnames(KEGG) = c("Pathway names","A",
+                   "B")
+rownames(KEGG) = KEGG$`Pathway names`
+KEGG$`Pathway names` = NULL
+KEGG[is.na(KEGG)] = 1
+KEGG = -log(KEGG,10)
+
+#heatmap.2(as.matrix(KEGG), trace="none", dendrogram = "none", cexRow  = 
+         #   0.5,margins = c(7, 15),cexCol = 0.5)
+
+tiff("d:/dataset/new_plot_mirna//KEGGs.tiff" , width = 4.5, height = 5.5, units = 'in', res = 600)
+
+#pheatmap(as.matrix(KEGG),cluster_cols = FALSE,cluster_rows = FALSE,main = "Heatmap", legend = TRUE,angle_col=0, 
+       #  gaps_col = 1,fontsize = 4,annotation_legend = TRUE, cellwidth = 60)
+
+col_fun_kegg = colorRamp2(c(0, 2, 6,8,10,12,14), c("white","LIGHTgreen", "lightGREEN","GREEN","Green", "blue","darkblue"))
+
+lgd = Legend(col_fun = col_fun_kegg, title = "-log10(FDR)", legend_gp = gpar (font =2),direction = "horizontal")
+
+h1 = Heatmap(as.matrix(KEGG),col = col_fun_kegg,
+cluster_rows = FALSE, cluster_columns = FALSE, show_column_dend = FALSE, column_km =  1,column_split = seq(2),width = unit(2, "cm"), height = unit(10, "cm"), row_names_gp = gpar(fontsize = 8), column_names_gp = gpar(fontsize = 8),row_order = order(-KEGG$A),rect_gp = gpar(col = "black", lwd = 1),heatmap_legend_param = list(title = "-log10(FDR)"), column_names_rot = 0,row_gap = unit(2, "cm"),show_heatmap_legend = FALSE)
+ 
+h1
+draw(lgd, x = unit(0.40, "npc"), y = unit(0.95, "npc"))
+dev.off()
+
+```
+
+```{r}
+library(cowplot)
+library (ggpubr)
+Go_downregsmRNA_upregs_miRNAs_CC = downregsmRNA_upregs_miRNAs_GO[grep("CC",downregsmRNA_upregs_miRNAs_GO$ontology),]
+#Go_downregsmRNA_upregs_miRNAs_CC = subset(Go_downregsmRNA_upregs_miRNAs_CC, select = c("term","FDR"))
+Go_upregsmRNA_downregs_miRNAs_CC = upregsmRNA_downregs_miRNAs_GO[grep ("CC",upregsmRNA_downregs_miRNAs_GO$ontology),]
+#Go_upregsmRNA_downregs_miRNAs_CC = subset(Go_upregsmRNA_downregs_miRNAs_CC, select = c("term","FDR") )
+#Cellular_Component = merge (Go_downregsmRNA_upregs_miRNAs_CC,Go_downregsmRNA_upregs_miRNAs_CC,by ="term", all = T) 
+#rownames(Cellular_Component) = Cellular_Component$term 
+#Cellular_Component$term = NULL
+#colnames(Cellular_Component) = c("Down_regulated_genes_up_miRNA","Up_regulated_genes_down_miRNA")
+
+
+
+Go_downregsmRNA_upregs_miRNAs_BP = downregsmRNA_upregs_miRNAs_GO[grep("BP",downregsmRNA_upregs_miRNAs_GO$ontology),]
+#Go_downregsmRNA_upregs_miRNAs_BP = subset(Go_downregsmRNA_upregs_miRNAs_BP, select = c("term","FDR"))
+Go_upregsmRNA_downregs_miRNAs_BP = upregsmRNA_downregs_miRNAs_GO[grep ("BP",upregsmRNA_downregs_miRNAs_GO$ontology),]
+#Go_upregsmRNA_downregs_miRNAs_BP = subset(Go_upregsmRNA_downregs_miRNAs_BP,select = c ("term","FDR"))
+
+Go_downregsmRNA_upregs_miRNAs_MF = downregsmRNA_upregs_miRNAs_GO[grep("MF",downregsmRNA_upregs_miRNAs_GO$ontology),]
+#Go_downregsmRNA_upregs_miRNAs_MF = subset (Go_downregsmRNA_upregs_miRNAs_MF,select = c("term","FDR"))
+Go_upregsmRNA_downregs_miRNAs_MF = upregsmRNA_downregs_miRNAs_GO[grep ("MF",upregsmRNA_downregs_miRNAs_GO$ontology),]
+#Go_upregsmRNA_downregs_miRNAs_MF = subset (Go_upregsmRNA_downregs_miRNAs_MF, select = c("term","FDR"))
+
+
+Go_downregsmRNA_upregs_miRNAs = subset(downregsmRNA_upregs_miRNAs_GO, select = c("term","FDR","ontology","Enrich"))
+Go_downregsmRNA_upregs_miRNAs1 = Go_downregsmRNA_upregs_miRNAs[Go_downregsmRNA_upregs_miRNAs$FDR < 0.005 & Go_downregsmRNA_upregs_miRNAs$Enrich > 2 ,]
+Go_upregsmRNA_downregs_miRNA = subset(Go_upregsmRNA_downregs_miRNAs_BP,select = c ("term","FDR","ontology","Enrich"))
+Go_upregsmRNA_downregs_miRNA1 = Go_upregsmRNA_downregs_miRNA[Go_upregsmRNA_downregs_miRNA$FDR < 0.005 &Go_upregsmRNA_downregs_miRNA$Enrich > 2 ,]
+
+F = Go_upregsmRNA_downregs_miRNAs_MF  %>% 
+    top_n(10, wt=-FDR) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, 
+               y=term, 
+               colour=FDR, 
+               size=numDEInCat)) +
+        geom_point() +
+        expand_limits(x=0:40)  + 
+        labs(x="Hits (%)", y="Molecular Function",face="bold", colour="FDR", size="Count") +
+        theme(axis.text.y = element_text(size=5, colour = "BLACK"),axis.text.x = element_text(size=5,color = "BLACK"),axis.title.y = element_text(size =5, face = "bold", color = "blue"))
+
+Go_upregsmRNA_downregs_miRNAs_MF  %>% 
+  top_n(10, wt=-FDR) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) -> dt
+  m = median(dt$hitsPerc)
+  up_mf = dt[dt$hitsPerc >= m,]
+  up_mf = subset (up_mf,select = c("term","FDR"))
+  rownames(up_mf) = up_mf$term 
+  up_mf$term = NULL
+  up_mf = -log(up_mf,10)
+  up_mf$process = "Molecular function" 
+
+A = Go_downregsmRNA_upregs_miRNAs_CC  %>% 
+    top_n(10, wt=-FDR) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, 
+               y=term, 
+               colour=FDR, 
+               size=numDEInCat)) +
+        geom_point() +
+        expand_limits(x=0:40)  + 
+        labs(x="Hits (%)", y="Cellular Component", colour="FDR", size="Count",face="bold") +
+        theme(axis.text.y = element_text(size=5, colour = "BLACK"),axis.text.x = element_text(size=5,color = "BLACK"),axis.title.y = element_text(size =5, face = "bold", color = "blue"))
+
+Go_downregsmRNA_upregs_miRNAs_CC  %>% 
+  top_n(10, wt=-FDR) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) -> dt
+  m = median(dt$hitsPerc)
+  down_cc = dt[dt$hitsPerc >= m,]
+  down_cc = subset (down_cc,select = c("term","FDR"))
+  rownames(down_cc) = down_cc$term 
+  down_cc$term = NULL
+  down_cc = -log(down_cc,10)
+  down_cc$process = "Cellular Component"
+
+B = Go_upregsmRNA_downregs_miRNAs_CC  %>% 
+    top_n(10, wt=-FDR) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, 
+               y=term, 
+               colour=FDR, 
+               size=numDEInCat)) +
+        geom_point() +
+        expand_limits(x=0:40)  + 
+        labs(x="Hits (%)", y="Cellular Component", colour="FDR", size="Count") +
+        theme(axis.text.y = element_text(size=5, colour = "BLACK"),axis.text.x = element_text(size=5,color = "BLACK"),axis.title.y = element_text(size =5, face = "bold", color = "blue"))
+
+Go_upregsmRNA_downregs_miRNAs_CC  %>% 
+  top_n(10, wt=-FDR)  %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) -> dt
+  m = median(dt$hitsPerc)
+  up_cc = dt[dt$hitsPerc >= m,]
+  up_cc = subset (up_cc,select = c("term","FDR"))
+  rownames(up_cc) = up_cc$term 
+  up_cc$term = NULL
+  up_cc = -log(up_cc,10)
+  up_cc$process = "Cellular Component"
+
+C = Go_downregsmRNA_upregs_miRNAs_BP  %>% 
+    top_n(10, wt=-FDR) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, 
+               y=term, 
+               colour=FDR, 
+               size=numDEInCat)) +
+        geom_point() +
+        expand_limits(x=0:40)  + 
+        labs(x="Hits (%)", y="Biological Process", colour="FDR", size="Count") +
+        theme(axis.text.y = element_text(size=5, colour = "BLACK"),axis.text.x = element_text(size=5,color = "BLACK"),axis.title.y = element_text(size =5, face = "bold", color = "blue"))
+
+
+Go_downregsmRNA_upregs_miRNAs_BP  %>% 
+  top_n(10, wt=-FDR) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) -> dt
+  m = median(dt$hitsPerc)
+  down_bp = dt[dt$hitsPerc >= m,]
+  down_bp = subset (down_bp,select = c("term","FDR"))
+  rownames(down_bp) = down_bp$term 
+  down_bp$term = NULL
+  down_bp = -log(down_bp,10)
+
+ down_bp$process = "Biological process"
+
+D = Go_upregsmRNA_downregs_miRNAs_BP  %>% 
+    top_n(10, wt=-FDR) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, 
+               y=term, 
+               colour= FDR, 
+               size=numDEInCat)) +
+        geom_point(fill = "red") +
+        expand_limits(x=0:40)  + 
+        labs(x="Hits (%)", y="Biological Process", colour="FDR", size="Count") +
+        theme(axis.text.y = element_text(size=5, colour = "BLACK"),axis.text.x = element_text(size=5,color = "BLACK"),axis.title.y = element_text(size =5, face = "bold", color = "blue"))
+
+Go_upregsmRNA_downregs_miRNAs_BP  %>% 
+  top_n(10, wt=-FDR) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) -> dt
+  m = median(dt$hitsPerc)
+  up_bp = dt[dt$hitsPerc >= m,]
+  up_bp = subset (up_bp,select = c("term","FDR"))
+  rownames(up_bp) = up_bp$term 
+  up_bp$term = NULL
+  up_bp = -log(up_bp,10)
+  up_bp$process = "Biological process"
+
+E = Go_downregsmRNA_upregs_miRNAs_MF  %>% 
+    top_n(10, wt=-FDR) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+    ggplot(aes(x=hitsPerc, 
+               y=term, 
+               colour=FDR, 
+               size=numDEInCat)) +
+        geom_point() +
+        expand_limits(x=0:40)  + 
+        labs(x="Hits (%)", y="Molecular Function", colour="FDR", size="Count") +
+        theme(axis.text.y = element_text(size=2, colour = "BLACK"),axis.text.x = element_text(size=2,color = "BLACK"),axis.title.y = element_text(size =4, face = "bold", color = "blue"))
+
+Go_downregsmRNA_upregs_miRNAs_MF  %>% 
+    top_n(10, wt=-FDR) %>% 
+  mutate(hitsPerc=numDEInCat*100/numInCat) -> dt
+ m = median(dt$hitsPerc)
+down_mf = dt[m <= dt$hitsPerc,]
+down_mf = subset (down_mf,select = c("term","FDR"))
+rownames(down_mf) = down_mf$term 
+down_mf$term = NULL
+down_mf = -log(down_mf,10)
+down_mf$process =  "Molecular function"
+
+up_mirnas_GO = rbind (up_bp,up_cc,up_mf)
+down_mirnas_GO = rbind (down_bp,down_cc,down_mf)
+genes = merge (up_mirnas_GO,down_mirnas_GO, by = "row.names", all =TRUE)
+rownames(genes) = genes$Row.names
+genes$Row.names = NULL
+genes = unite(genes, process, c(process.x, process.y), remove=FALSE)
+genes$process.x = NULL
+genes$process.y = NULL
+colnames(genes) = c("Up_mirnas","Process","Down_mirnas")
+genes1 = subset (genes, select = c("Up_mirnas","Down_mirnas","Process"))
+colnames(genes1) = c("Up_mirnas","Down_mirnas", "Process")
+genes1$Process = gsub ("NA_|_NA","",genes1$Process)
+genes1[is.na(genes1)] <- 0
+
+tiff("d:/dataset/new_plot_mirna/GO1.png" , width = 6, height = 5.5, units = 'in', res = 600)
+
+col_fun_GO = colorRamp2(c(0, 10, 20,30,40), c("white","LIGHTgreen", "lightGREEN","GREEN","darkblue"))
+
+lgd1 = Legend(col_fun = col_fun_GO, title = "-log10(FDR)", legend_gp = gpar (font =2),direction = "horizontal")
+
+
+h1 = Heatmap(as.matrix(genes1[1:2]),col = col_fun_GO,
+             cluster_rows = FALSE, cluster_columns = FALSE, show_column_dend = FALSE, column_km = 1,width = unit(2, "cm"), height = unit(10.5, "cm"), row_names_gp = gpar(fontsize = 8),column_names_gp = gpar(fontsize = 8),row_split = genes1$Process,border = TRUE,column_split = seq(2),heatmap_legend_param = list(title = "-log10(FDR)"),row_order = order(genes1$Up_mirnas),rect_gp = gpar(col = "black", lwd = 1),show_heatmap_legend = FALSE)
+
+h1
+
+draw(lgd1, x = unit(0.7, "npc"), y = unit(0.9, "npc"))
+dev.off()
+
+tiff("d:/dataset/new_plot_mirna/down_GO.png" , width = 3.8, height = 3.5, units = 'in', res = 600)
+
+h2 = Heatmap(as.matrix(down_mirnas_GO[1]),col = c("white","blue","green","Red"),
+             cluster_rows = FALSE, cluster_columns = FALSE, show_column_dend = FALSE, column_km = 1,width = unit(2, "cm"), height = unit(7.5, "cm"), row_names_gp = gpar(fontsize = 4),column_names_gp = gpar(fontsize = 8),row_split = down_mirnas_GO$process ,border = TRUE,heatmap_legend_param = list(title = "-log10(FDR)"))
+h2
+dev.off()
+
+multiplot <- align_plots(A,B,C,D,E,F, align = "vh", axis = "bt")
+A = ggdraw() + draw_grob(multiplot[[1]])
+B = ggdraw() + draw_grob(multiplot[[2]])
+C = ggdraw() + draw_grob(multiplot[[3]])
+D = ggdraw() + draw_grob(multiplot[[4]])
+E = ggdraw() + draw_grob(multiplot[[5]])
+F = ggdraw() + draw_grob(multiplot[[6]])
+
+
+figure <- ggarrange(A, B, C, D, E, F,
+                    labels = c("A", "B","C","D","E","F"),
+                    ncol = 2, nrow = 3)
+
+
+Go_downregsmRNA_upregs_miRNAs1 = subset (Go_downregsmRNA_upregs_miRNAs1,select =  c("term","FDR"))
+Go_upregsmRNA_downregs_miRNA1 = subset (Go_upregsmRNA_downregs_miRNA1, select = c("term","FDR"))
+
+gene_ontology_all =merge (Go_downregsmRNA_upregs_miRNAs1,Go_upregsmRNA_downregs_miRNA1, by = "term", all = TRUE)
+rownames(gene_ontology_all) = gene_ontology_all$term
+gene_ontology_all$term = NULL
+colnames(gene_ontology_all) = c("A","B")
+gene_ontology_all = -log(gene_ontology_all,10)
+
+
+
+
+tiff("d:/dataset/new_plot_mirna/Gene_ontology.tiff" , width = 10, height = 10, units = 'in', res = 900)
+figure
+dev.off()
+
+knitr::include_graphics("Z:/Shared/miRNAs_seq_figures/goseq_upregs_down_regs_genes.tiff")
+
+
+```
+
+# miRNAs targetting maximum down-regulated mRNAs.
+```{r}
+library(plyr)
+library(data.table)
+values = dlply (down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs,"Representative.miRNA")
+
+miRNs = function(x)
+{
+  df = as.data.frame(x)
+  colnames(df) = colnames(down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs)
+  ensembl_id = paste0(df$Row.names,collapse = ",")
+  Transcript_id = paste0(df$Transcript.ID,collapse = ",")
+  dfs = as.data.frame(unique(df$Representative.miRNA))
+  colnames(dfs) = "miRNAs"
+  dfs$ensembl_id =  ensembl_id
+  dfs$Transcript_id = Transcript_id
+  colnames(dfs) = c("miRNAs","ensembl_id","Transcript_id")
+  return(dfs)
+  
+}
+
+dat = lapply(values, miRNs)
+regulated_up_miRNAs = do.call(rbind,dat)
+regulated_up_miRNAs$count_genes <- sapply(strsplit(regulated_up_miRNAs$Transcript,','), uniqueN)
+regulated_up_miRNAs1 = regulated_up_miRNAs[regulated_up_miRNAs$count_genes >= 500,]
+regulated_up_miRNAs1=rbind (regulated_up_miRNAs["hsa-miR-155-5p",], regulated_up_miRNAs1)
+
+write.csv (regulated_up_miRNAs,"z:/Shared/miRNA_results/upregs_mirnas_downregs_target_genes_count.csv")
+
+
+```
+Upset plot for up regs miRNAs
+```{r}
+library (tidyr)
+library (rowr)
+library (ComplexHeatmap)
+normed_df <- regulated_up_miRNAs1 %>% dplyr::select(miRNAs, ensembl_id) %>% separate_rows(ensembl_id) 
+
+a = normed_df %>% group_split(normed_df$miRNAs)
+df = do.call (cbind.fill,a)
+df_redacted <- df[, -grep("\\miRNAs", colnames(df))]
+colnames(df_redacted) = unique (regulated_up_miRNAs1$miRNAs)
+tmp = split (t(df_redacted),colnames(df_redacted))
+
+z = list_to_matrix(tmp)
+z <- z[order(z[,3],z[,5], z[,4], z[,6], z[,1], z[,2] ),c(3,5,4,6,1,2)]
+rownames(z) =  NULL
+#m1 = make_comb_mat(z,mode = "intersect")
+#UpSet(m1, comb_col = "darkblue", bg_col = c("#F0F0FF", "#FFF0F0"), bg_pt_col = "darkgray")
+
+lgd1 = Legend(col_fun = c("white","darkblue"), title = "Targeted Genes", legend_gp = gpar (font =2),labels =c("Absent","Present"))
+
+tiff("d:/dataset/new_plot_mirna/UPREGS_TARGET_INTESECT.tiff" , width = 3 , height = 3, units = 'in', res = 600, pointsize = 8)
+
+
+Heatmap(t(z), col=c("white", "darkblue"), cluster_rows = FALSE, show_row_names = TRUE, cluster_columns = FALSE, show_column_names = FALSE,row_split = seq(1,6),width = unit(2, "cm"),row_names_gp = gpar(fontsize = 5),show_heatmap_legend = FALSE)
+h1
+draw(lgd1, x = unit(0.20, "npc"), y = unit(0.6, "npc"))
+dev.off()
+
+```
+
+#Jaccard index
+  Jaccard index is also called as Jaccard coefficiend or Jaccard Similarity, it is used to     measure the similarity or overlap between pair binary varaible. 
+    Jaccard index is calculated:
+        set of intersection divided by the set of union.
+        J(A,B) = intersect(A,B)/union(A,B)
+      
+```{r}
+library (circlize)
+Jaccard = function (x, y) {
+    M.11 = sum(x == 1 & y == 1)
+    M.10 = sum(x == 1 & y == 0)
+    M.01 = sum(x == 0 & y == 1)
+    return (M.11 / (M.11 + M.10 + M.01))
+}
+ 
+input.variables = data.frame(z)
+ 
+m = matrix(data = NA, nrow = length(input.variables), ncol = length(input.variables))
+for (r in 1:length(input.variables)) {
+    for (c in 1:length(input.variables)) {
+        if (c == r) {
+            m[r,c] = 1
+        } else if (c > r) {
+            m[r,c] = Jaccard(input.variables[,r], input.variables[,c])
+        }
+    }
+}
+ 
+variable.names = sapply(input.variables, attr, "label")
+jaccards = m
+jaccards[is.na(jaccards)] <- 0
+
+colnames(jaccards) = colnames(z)
+rownames (jaccards) = colnames(z)
+
+
+tiff("d:/dataset/new_plot_mirna/jaccard_index_up_miRNAs.png" , width = 4.5, height = 2.5, units = 'in', res = 600, pointsize = 8)
+
+col_fun = colorRamp2(c(0, 0.2,0.4,0.6,0.8,1), c("white", "GRAY", "GREEN","yellow","yellow","red"))
+Heatmap(jaccards,
+      col = col_fun,name = "Target genes overlap(Jaccard Index)",cluster_rows = FALSE,  cluster_columns = FALSE,row_names_gp = gpar(fontsize = 8),column_names_gp = gpar (fontsize = 8),width = unit(2, "cm"),rect_gp = gpar(col = "WHITE", lwd = 1))
+
+#draw(lgd, x = unit(0.10, "npc"), y = unit(0.6, "npc"))
+
+dev.off()
+
+
+j = melt (jaccards)
+j1 = j[!j$value ==0,]
+
+
+tiff("z:/Shared/miRNA_results/jaccard_index_up_miRNAs_numbers.tiff" , width = 6, height = 6, units = 'in', res = 600, pointsize = 8)
+
+ggheatmap <- ggplot(j1, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "red", high = "skyblue", mid = "green", 
+   midpoint = 0, limit = c(0,1), space = "Lab", 
+    name="Jaccrd Index") +
+  theme_minimal()+ # minimal theme
+ theme(axis.text.x = element_text(face="bold",angle = 45, vjust = 1, 
+    size = 12, hjust = 1,color = "black"),axis.text.y = element_text(face="bold",
+                                                                     color= "black",size = 12)) +
+ coord_fixed()
+
+ggheatmap + 
+geom_text(aes(Var2, Var1, label = round(value,digit=2)), color = "black", size = 4) +
+theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.border = element_blank(),
+  panel.background = element_blank(),
+  axis.ticks = element_blank())
+  
+
+dev.off()
+
+```
+
+```{r}
+library(plyr)
+library (data.table)
+library(tidyr)
+miRNAs_split = dlply(regulated_up_miRNAs1,"miRNAs")
+
+gene_enrichment = function(x)
+{
+  data = as.data.frame(x)
+  print (paste("working with", unique(data$miRNAs)))
+  colnames(data) = colnames(regulated_up_miRNAs1)
+  data = data %>% separate_rows(ensembl_id, convert = TRUE) %>%
+  drop_na()
+  data = data %>% separate_rows(Transcript_id, convert = TRUE) %>%
+  drop_na()
+  enrichment = subset (data, select = "ensembl_id")
+  background_lst = subset(background,select = Row.names)
+  background_lst = as.data.frame(background_lst[!duplicated(background_lst$Row.names),])
+  colnames(background_lst) = "ensembl_gene_id"
+  enrichments = as.data.frame(enrichment[!duplicated(enrichment$ensembl_id),])
+  colnames(enrichments) = "ID"
+  enrichments$value = 1
+  tmp = merge (background_lst,enrichments,by.x="ensembl_gene_id", by.y="ID",all = TRUE)  
+  tmp[is.na(tmp)] <- 0
+  gene = as.integer(tmp[,2])
+  names(gene) = tmp$ensembl_gene_id
+  gene = gene[!duplicated(names(gene))]
+  bias_data = background[background$Row.names%in% names(gene),]
+  bias_datas = bias_data[!duplicated(bias_data$Row.names),]
+  bias_datas1 = subset(bias_datas,select = "3_UTR_Length")
+  bias_data1 = as.vector(t(bias_datas1))
+  names(bias_data1) = bias_datas$Row.names
+  genes = gene[names(gene)%in%names(bias_data1)]
+  pwf=nullp(genes,bias.data = bias_data1)
+  GO.counts=goseq(pwf,"hg19","ensGene")
+
+getGeneLists <- function(pwf, goterms, genome, ids){
+  gene2cat <- getgo(rownames(pwf), genome, ids)
+  cat2gene <- split(rep(names(gene2cat), sapply(gene2cat, length)),
+                    unlist(gene2cat, use.names = FALSE))
+  out <- list()
+  for(term in goterms){
+    tmp <- pwf[cat2gene[[term]],]
+    tmp <- rownames(tmp[tmp$DEgenes > 0, ])
+    out[[term]] <- tmp
+  }
+  out
+}
+
+goterms <- GO.counts$category 
+goList <- getGeneLists(pwf, goterms, "hg38", "ensGene")
+GO.counts$EnsemblID <- sapply(GO.counts$category, function(x) goList[[x]])
+GO.counts <- GO.counts[GO.counts$numInCat > 10,]
+GO.counts$Enrich <- (GO.counts$numDEInCat/sum(gene))/(GO.counts$numInCat/length(gene))
+GO.counts$FDR <- p.adjust(GO.counts$over_represented_pvalue, method="BH")
+return (GO.counts)
+}
+
+df = lapply(miRNAs_split, gene_enrichment)
+GO_r = bind_rows(df, .id="miRNAs")
+GO_r1 <- GO_r[GO_r$numDEInCat > 10,]
+GO_r2 <- GO_r1[GO_r1$numInCat < 150,]
+GO_r2$FDR <- p.adjust(GO_r2$over_represented_pvalue, method="BH")
+go_up = GO_r2[GO_r2$FDR < 0.05,]
+down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs_individual_GO = GO_r2
+down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs_individual_GO = subset (down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs_individual_GO, select = c("miRNAs","term","FDR","ontology"))
+
+down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs_individual_GOa = down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs_individual_GO[down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs_individual_GO$FDR < 0.05,]
+
+down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs_individual__term_onto = subset (down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs_individual_GO, select = c("term","ontology"))
+
+down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs_individual_GOs = dlply(down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs_individual_GOa,"miRNAs")
+
+M <- Reduce(function(x,y)merge(x,y,by="term",  all.x=T, all.y=T), down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs_individual_GOs)
+M1 = M[,grepl("FDR", colnames(M))]
+M1[is.na(M1)] <- 1
+
+rownames(M1) = M$term  
+colnames(M1) = unique(GO_r2$miRNAs)
+M1 = -log(M1,10)
+M2 = merge (M1,down_RNAslps_up_trgt_miRNAs_add_trgt_miRNAs_individual__term_onto, by.x = "row.names", by.y = "term") 
+M3 = M2[!duplicated(M2$Row.names),] 
+rownames(M3) = M3$Row.names
+M3$Row.names = NULL
+m4 =M3[order(M3$`hsa-miR-186-5p`,M3$`hsa-miR-3614-5p`, M3$`hsa-miR-4773`, M3$`hsa-miR-125a-3p`, M3$`hsa-miR-7-5p`, M3$`hsa-miR-155-5p`,M3$ontology ),c(3,4,5,1,6,2,7)]
+
+#pheatmap(as.matrix(M1),cluster_cols = FALSE,cluster_rows = FALSE,angle_col=45,main = "Heatmap",legend_labels = "-log10(FDR)\n",gaps_col = c(1,2,3,4,5),fontsize = 8,annotation_legend = TRUE, cellwidth = 80)
+
+col_fun = colorRamp2(c(0, 6), c("white", "blue"))
+col_fun(seq(0, 6))
+lgd = Legend(col_fun = col_fun, title = "Log10(FDR")
+
+tiff("d:/dataset/new_plot_mirna/upregs.tiff" , width = 6, height = 3.5, units = 'in', res = 600)
+
+h1<-Heatmap(
+     as.matrix(m4[,1:6], ncol = 6),
+     col = col_fun,
+     row_split = m4$ontology,border = TRUE , cluster_rows = FALSE, cluster_columns = FALSE, show_column_dend = FALSE, column_km = 1,row_gap = unit(0.5,"mm"), column_split = seq(1,6),width = unit(2, "cm"),row_names_gp = gpar(fontsize = 3),heatmap_legend_param = list(title = "-log10(FDR)",at  = c(0,2,4), legend_height = unit(1,"cm"),fontsize= 3),row_order = order(m4$`hsa-miR-186-5p`,m4$`hsa-miR-3614-5p`,m4$`hsa-miR-4773`,m4$`hsa-miR-125a-3p`,m4$`hsa-miR-125a-3p`,m4$`hsa-miR-7-5p`,m4$`hsa-miR-155-5p`), height = unit (7.5,"cm"),column_names_gp = gpar (fontsize = 4), show_heatmap_legend = FALSE,row_title_gp = gpar(fontsize = 4))
+
+draw(h1,heatmap_legend_side = "left")
+dev.off
+ 
+
+```
+
+```{r}
+library(plyr)
+GO_split = dlply(GO_r,"miRNAs")
+
+GO_plot = function(x)
+{
+  GO_dat = as.data.frame(x)
+  colnames(GO_dat) = colnames(GO_r)
+  name = unique(GO_dat$miRNAs)
+  GO_dat  %>% 
+    top_n(10, wt=-FDR) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+     ggplot(aes(x=hitsPerc, 
+               y=term, 
+               colour=FDR, 
+               size=numDEInCat)) +
+        geom_point() +
+        expand_limits(x=0) +
+        labs(x="Hits (%)", y="GO term", colour="FDR", size="Count",title = paste0(name))
+ 
+}
+
+lapply(GO_split, GO_plot)
+
+```
+```{r}
+all_Go = GO_r2
+all_Go = subset (all_Go, select = c("miRNAs","term","FDR"))
+all_go_up = dlply(all_Go,"miRNAs")
+Go_all_columns = function(x)
+{
+ GO_dat = as.data.frame(x)
+  colnames(GO_dat) = colnames(all_Go)
+  name = unique(GO_dat$miRNAs)
+  sub = subset(GO_dat, select = c("term","FDR"))
+  colnames(sub) = c("term",paste0(name))
+  return(sub)
+}
+GO_r_all = lapply(all_go_up, Go_all_columns)
+tmp_all = do.call(cbind.fill,(GO_r_all))
+all = Reduce(function(x, y) merge(x=x, y=y, by="term", all =T), GO_r_all)
+rownames(all) = all$term
+all$term = NULL
+all = -log (all,10)
+all[is.na(all)] <- 0
+
+```
+
+```{r}
+GO_split = dlply(go_up,"miRNAs")
+
+GO_plot = function(x)
+{
+  
+  GO_dat = as.data.frame(x)
+  colnames(GO_dat) = colnames(go_down)
+  name = unique(GO_dat$miRNAs) 
+
+  GO_dat  %>% 
+    top_n(10, wt=-FDR)%>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) -> dt
+  
+  m = median(dt$hitsPerc)
+  dts = dt[m <= dt$hitsPerc,]
+  
+  GO_data = subset (dts, select = c("term","FDR"))
+  colnames(GO_data) = c("term",name)
+  return (GO_data)
+  
+  }
+
+GO_r1 = lapply(GO_split, GO_plot)
+tmp = do.call(cbind.fill,(GO_r1))
+b = Reduce(function(x, y) merge(x=x, y=y, by="term", all =T), GO_r1)
+rownames(b) = b$term
+b$term = NULL
+b = -log (b,10)
+b[is.na(b)] <- 0
+b1 = merge (b,all,by = "row.names")
+rownames(b1) = b1$Row.names
+b2 = b1[,grep(".y",colnames(b1))]
+colnames(b2) = gsub (".y","",colnames(b2))
+
+tiff("d:/dataset/new_plot_mirna/Up_regs_new.tiff" , width = 5, height =4.5, units = 'in', res = 600, pointsize = 8)
+
+
+
+col_fun = colorRamp2(c(0, 2, 6,8), c("white","green", "blue","darkblue"))
+lgd = Legend(col_fun = col_fun, title = "-log10(FDR)", legend_gp = gpar (font =2))
+h2<-Heatmap(
+     as.matrix(b2, ncol = ncol(b2)),
+     col = col_fun,
+     border = TRUE , cluster_rows = FALSE, cluster_columns = FALSE, show_column_dend = FALSE, column_km = 1,row_gap = unit(0.5,"mm"), column_split = seq(1,6),width = unit(1.5, "cm"),row_names_gp = gpar(fontsize = 8),heatmap_legend_param = list(title = "-log10(FDR)", legend_height = unit(1,"cm"),fontsize= 3), height = unit (5,"cm"),column_names_gp = gpar (fontsize = 8), show_heatmap_legend = FALSE,row_title_gp = gpar(fontsize = 8),rect_gp = gpar(col = "black", lwd = 1),row_order = order(b$`hsa-miR-7-5p`,b$`hsa-miR-125a-3p`,b$`hsa-miR-155-5p`,b$`hsa-miR-3614-5p`,b$`hsa-miR-4773`))
+h2
+draw(lgd, x = unit(0.10, "npc"), y = unit(0.6, "npc"))
+dev.off()
+```
+
+
+
+
+```{r}
+# miRNAs targetting maximum down-regulated mRNAs.
+library(plyr)
+library(data.table)
+values = dlply (up_RNAslps_down_trgt_miRNAs_add_trgt_miRNAs,"Representative.miRNA")
+
+miRNs = function(x)
+{
+  df = as.data.frame(x)
+  colnames(df) = colnames(up_RNAslps_down_trgt_miRNAs_add_trgt_miRNAs)
+  ensembl_id = paste0(df$Row.names,collapse = ",")
+  Transcript_id = paste0(df$Transcript.ID,collapse = ",")
+  dfs = as.data.frame(unique(df$Representative.miRNA))
+  colnames(dfs) = "miRNAs"
+  dfs$ensembl_id =  ensembl_id
+  dfs$Transcript_id = Transcript_id
+  colnames(dfs) = c("miRNAs","ensembl_id","Transcript_id")
+  return(dfs)
+  
+}
+
+dat = lapply(values, miRNs)
+regulated_down_miRNAs = do.call(rbind,dat)
+regulated_down_miRNAs$count_genes <- sapply(strsplit(regulated_down_miRNAs$Transcript,','), uniqueN)
+regulated_down_miRNAs1 = regulated_down_miRNAs[regulated_down_miRNAs$count_genes >= 500,]
+write.csv (regulated_down_miRNAs,"z:/Shared/miRNA_results/downregs_mirnas_upregs_target_genes_count.csv")
+```
+jaccard index
+```{r}
+library (tidyr)
+library (rowr)
+normed_df <- regulated_down_miRNAs1 %>% dplyr::select(miRNAs, ensembl_id) %>% separate_rows(ensembl_id) 
+
+a = normed_df %>% group_split(normed_df$miRNAs)
+df = do.call (cbind.fill,a)
+df_redacted <- df[, -grep("\\miRNAs", colnames(df))]
+colnames(df_redacted) = unique(regulated_down_miRNAs1$miRNAs)
+tmp = split (t(df_redacted),colnames(df_redacted))
+
+z = list_to_matrix(tmp)
+
+Jaccard = function (x, y) {
+    M.11 = sum(x == 1 & y == 1)
+    M.10 = sum(x == 1 & y == 0)
+    M.01 = sum(x == 0 & y == 1)
+    return (M.11 / (M.11 + M.10 + M.01))
+}
+ 
+input.variables = data.frame(z)
+ 
+m = matrix(data = NA, nrow = length(input.variables), ncol = length(input.variables))
+for (r in 1:length(input.variables)) {
+    for (c in 1:length(input.variables)) {
+        if (c == r) {
+            m[r,c] = 1
+        } else if (c > r) {
+            m[r,c] = Jaccard(input.variables[,r], input.variables[,c])
+        }
+    }
+}
+ 
+variable.names = sapply(input.variables, attr, "label")
+jaccards = m
+jaccards[is.na(jaccards)] <- 0
+
+colnames(jaccards) = colnames(z)
+rownames (jaccards) = colnames(z)
+
+
+tiff("d:/dataset/new_plot_mirna/jaccard_index_down_miRNAs.png" , width = 3.5, height = 2.5, units = 'in', res = 600, pointsize = 8)
+col_fun = colorRamp2(c(0, 0.2,0.4,0.6,0.8,1), c("white", "GRAY", "GREEN","yellow","yellow","red"))
+
+Heatmap(jaccards,
+      col = col_fun,name = "Jaccard Index",cluster_rows = FALSE,  cluster_columns = FALSE,row_names_gp = gpar(fontsize = 8),column_names_gp = gpar (fontsize = 8),width = unit(2, "cm"),rect_gp = gpar(col = "WHITE", lwd = 1))
+dev.off()
+
+```
+
+```{r}
+
+j = melt (jaccards)
+j1 = j[!j$value ==0,]
+
+tiff("z:/Shared/miRNA_results/jaccard_index_down_miRNAs_numbers.tiff" , width = 6, height = 6, units = 'in', res = 600, pointsize = 8)
+
+ggheatmap <- ggplot(j1, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "red", high = "skyblue", mid = "green", 
+   midpoint = 0, limit = c(0,1), space = "Lab", 
+    name="Jaccrd Index") +
+  theme_minimal()+ # minimal theme
+ theme(axis.text.x = element_text(face="bold",angle = 45, vjust = 1, 
+    size = 12, hjust = 1,color = "black"),axis.text.y = element_text(face="bold",
+                                                                     color= "black",size = 12)) +
+ coord_fixed()
+
+ggheatmap + 
+geom_text(aes(Var2, Var1, label = round(value,digit=2)), color = "black", size = 4) +
+theme(
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.border = element_blank(),
+  panel.background = element_blank(),
+  axis.ticks = element_blank())
+  
+
+dev.off()
+
+```
+
+
+```{r}
+library(plyr)
+library (data.table)
+miRNAs_split = dlply(regulated_down_miRNAs1,"miRNAs")
+
+gene_enrichment = function(x)
+{
+  data = as.data.frame(x)
+  print (paste("working with", unique(data$miRNAs)))
+  colnames(data) = colnames(regulated_up_miRNAs1)
+  data = data %>% separate_rows(ensembl_id, convert = TRUE) %>%
+  drop_na()
+  data = data %>% separate_rows(Transcript_id, convert = TRUE) %>%
+  drop_na()
+  enrichment = subset (data, select = "ensembl_id")
+  background_lst = subset(background,select = Row.names)
+  background_lst = as.data.frame(background_lst[!duplicated(background_lst$Row.names),])
+  colnames(background_lst) = "ensembl_gene_id"
+  enrichments = as.data.frame(enrichment[!duplicated(enrichment$ensembl_id),])
+  colnames(enrichments) = "ID"
+  enrichments$value = 1
+  tmp = merge (background_lst,enrichments,by.x="ensembl_gene_id", by.y="ID",all = TRUE)  
+  tmp[is.na(tmp)] <- 0
+  gene = as.integer(tmp[,2])
+  names(gene) = tmp$ensembl_gene_id
+  gene = gene[!duplicated(names(gene))]
+  bias_data = background[background$Row.names%in% names(gene),]
+  bias_datas = bias_data[!duplicated(bias_data$Row.names),]
+  bias_datas1 = subset(bias_datas,select = "3_UTR_Length")
+  bias_data1 = as.vector(t(bias_datas1))
+  names(bias_data1) = bias_datas$Row.names
+  genes = gene[names(gene)%in%names(bias_data1)]
+  pwf=nullp(genes,bias.data = bias_data1)
+  GO.counts=goseq(pwf,"hg19","ensGene")
+
+getGeneLists <- function(pwf, goterms, genome, ids){
+  gene2cat <- getgo(rownames(pwf), genome, ids)
+  cat2gene <- split(rep(names(gene2cat), sapply(gene2cat, length)),
+                    unlist(gene2cat, use.names = FALSE))
+  out <- list()
+  for(term in goterms){
+    tmp <- pwf[cat2gene[[term]],]
+    tmp <- rownames(tmp[tmp$DEgenes > 0, ])
+    out[[term]] <- tmp
+  }
+  out
+}
+
+goterms <- GO.counts$category 
+goList <- getGeneLists(pwf, goterms, "hg38", "ensGene")
+GO.counts$EnsemblID <- sapply(GO.counts$category, function(x) goList[[x]])
+GO.counts <- GO.counts[GO.counts$numInCat > 10,]
+GO.counts$Enrich <- (GO.counts$numDEInCat/sum(gene))/(GO.counts$numInCat/length(gene))
+GO.counts$FDR <- p.adjust(GO.counts$over_represented_pvalue, method="BH")
+return (GO.counts)
+}
+
+df = lapply(miRNAs_split, gene_enrichment)
+GO_r = bind_rows(df, .id="miRNAs")
+GO_r <- GO_r[GO_r$numDEInCat > 10,]
+GO_r <- GO_r[GO_r$numInCat < 150,]
+GO_r$FDR <- p.adjust(GO_r$over_represented_pvalue, method="BH")
+go_down = GO_r[GO_r$FDR < 0.005,]
+
+
+UP_RNAslps_DOWN_trgt_miRNAs_add_trgt_miRNAs_individual_GO = GO_r
+UP_RNAslps_DOWN_trgt_miRNAs_add_trgt_miRNAs_individual_GO = subset (UP_RNAslps_DOWN_trgt_miRNAs_add_trgt_miRNAs_individual_GO, select = c("miRNAs","term","FDR","ontology"))
+
+UP_RNAslps_DOWN_trgt_miRNAs_add_trgt_miRNAs_individual_GOa = UP_RNAslps_DOWN_trgt_miRNAs_add_trgt_miRNAs_individual_GO[UP_RNAslps_DOWN_trgt_miRNAs_add_trgt_miRNAs_individual_GO$FDR < 0.005,]
+
+UP_RNAslps_DOWN_trgt_miRNAs_add_trgt_miRNAs_individual_GOa_ONTO = subset(UP_RNAslps_DOWN_trgt_miRNAs_add_trgt_miRNAs_individual_GOa, select = c("term","ontology"))
+
+UP_RNAslps_DOWN_trgt_miRNAs_add_trgt_miRNAs_individual_GOs = dlply(UP_RNAslps_DOWN_trgt_miRNAs_add_trgt_miRNAs_individual_GOa,"miRNAs")
+
+M <- Reduce(function(x,y)merge(x,y,by="term",  all.x=T, all.y=T), UP_RNAslps_DOWN_trgt_miRNAs_add_trgt_miRNAs_individual_GOs)
+M1 = M[,grep("FDR", colnames(M))]
+M1[is.na(M1)] <- 1
+
+colnames(M1) = unique(GO_r$miRNAs)
+rownames(M1) = M$term  
+M1 = -log(M1,10)
+M2 = merge (M1,UP_RNAslps_DOWN_trgt_miRNAs_add_trgt_miRNAs_individual_GOa_ONTO, by.x = "row.names",by.y = "term")
+M3 = M2[!duplicated(M2$Row.names),]
+rownames(M3) = M3$Row.names 
+M3$Row.names =  NULL
+
+#pheatmap(as.matrix(M1),cluster_cols = FALSE,cluster_rows = FALSE,angle_col=45,main = "Heatmap",legend_labels = "-log10(FDR)\n",gaps_col = c(1,2,3,4),fontsize = 8,annotation_legend = TRUE, cellwidth = 80)
+col_fun = colorRamp2(c(0, 2, 6,8), c("white","green", "blue","darkblue"))
+
+lgd = Legend(col_fun = col_fun, title = "-log10(FDR)", legend_gp = gpar (font =4))
+
+tiff("d:/dataset/new_plot_mirna/Down_regs.tiff" , width = 6.5, height = 6.5, units = 'in', res = 600, pointsize = 8)
+
+
+h1<-Heatmap(
+     as.matrix(M3[,1:4], ncol = 4),
+     col = col_fun,
+     row_split = M3$ontology,border = TRUE , cluster_rows = FALSE, cluster_columns = FALSE, show_column_dend = FALSE, column_km = 1,row_gap = unit(0.5,"mm"), column_split = seq(1,4),width = unit(1.5, "cm"),row_names_gp = gpar(fontsize = 8),heatmap_legend_param = list(title = "-log10(FDR)",at  = c(0,2,4), legend_height = unit(1,"cm"),fontsize= 3), height = unit (12,"cm"),column_names_gp = gpar (fontsize = 8), show_heatmap_legend = FALSE,row_title_gp = gpar(fontsize = 8),rect_gp = gpar(col = "black", lwd = 1))
+h1
+draw(lgd, x = unit(0.17, "npc"), y = unit(0.6, "npc"))
+dev.off()
+```
+
+
+
+```{r}
+library(plyr)
+GO_split = dlply(GO_r,"miRNAs")
+
+GO_plot = function(x)
+{
+  GO_dat = as.data.frame(x)
+  colnames(GO_dat) = colnames(GO_r)
+  name = unique(GO_dat$miRNAs)
+  GO_dat  %>% 
+    top_n(10, wt=-FDR) %>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) %>% 
+     ggplot(aes(x=hitsPerc, 
+               y=term, 
+               colour=FDR, 
+               size=numDEInCat)) +
+        geom_point() +
+        expand_limits(x=0) +
+        labs(x="Hits (%)", y="GO term", colour="FDR", size="Count",title = paste0(name))
+ 
+}
+
+lapply(GO_split, GO_plot)
+
+```
+
+```{r}
+
+all_Go = GO_r
+all_Go = subset (all_Go, select = c("miRNAs","term","FDR"))
+all_go_up = dlply(all_Go,"miRNAs")
+Go_all_columns = function(x)
+{
+ GO_dat = as.data.frame(x)
+  colnames(GO_dat) = colnames(all_Go)
+  name = unique(GO_dat$miRNAs)
+  sub = subset(GO_dat, select = c("term","FDR"))
+  colnames(sub) = c("term",paste0(name))
+  return(sub)
+}
+GO_r_all = lapply(all_go_up, Go_all_columns)
+tmp_all = do.call(cbind.fill,(GO_r_all))
+all = Reduce(function(x, y) merge(x=x, y=y, by="term", all =T), GO_r_all)
+rownames(all) = all$term
+all$term = NULL
+all = -log (all,10)
+all[is.na(all)] <- 0
+
+```
+
+
+```{r}
+GO_split = dlply(go_down,"miRNAs")
+
+GO_plot = function(x)
+{
+  
+  GO_dat = as.data.frame(x)
+  colnames(GO_dat) = colnames(go_down)
+  name = unique(GO_dat$miRNAs) 
+
+  GO_dat  %>% 
+    top_n(10, wt=-FDR)%>% 
+    mutate(hitsPerc=numDEInCat*100/numInCat) -> dt
+  
+  m = median(dt$hitsPerc)
+  dts = dt[m <= dt$hitsPerc,]
+  
+  GO_data = subset (dts, select = c("term","FDR"))
+  colnames(GO_data) = c("term",name)
+  return (GO_data)
+  
+  }
+
+GO_r1 = lapply(GO_split, GO_plot)
+tmp = do.call(cbind.fill,(GO_r1))
+a = Reduce(function(x, y) merge(x=x, y=y, by="term", all =T), GO_r1)
+rownames(a) = a$term
+a$term = NULL
+a = -log (a,10)
+a[is.na(a)] <- 0
+a1 = merge(a,all,by = "row.names")
+rownames(a1) = a1$Row.names
+
+a2 = a1[,grep(".y",colnames(a1))]
+colnames(a2) = gsub (".y","",colnames(a2))
+
+tiff("d:/dataset/new_plot_mirna/Down_regs_new.tiff" , width = 5, height =4.5, units = 'in', res = 600, pointsize = 8)
+
+col_fun = colorRamp2(c(0, 2, 6,8), c("white","green", "blue","darkblue"))
+lgd = Legend(col_fun = col_fun, title = "-log10(FDR)", legend_gp = gpar (font =2), direction = "horizontal")
+h1<-Heatmap(
+     as.matrix(a2, ncol = 4),
+     col = col_fun,
+     border = TRUE , cluster_rows = FALSE, cluster_columns = FALSE, show_column_dend = FALSE, column_km = 1,row_gap = unit(0.5,"mm"), column_split = seq(1,4),width = unit(1.5, "cm"),row_names_gp = gpar(fontsize = 8),heatmap_legend_param = list(title = "-log10(FDR)", legend_height = unit(1,"cm"),fontsize= 3), height = unit (5,"cm"),column_names_gp = gpar (fontsize = 8), show_heatmap_legend = FALSE,row_title_gp = gpar(fontsize = 8),rect_gp = gpar(col = "black", lwd = 1))
+h1
+draw(lgd, x = unit(0.10, "npc"), y = unit(0.6, "npc"))
+dev.off()
+```
+
+
+
+```{r}
+
+regulated_up_miRNAs_select = subset (regulated_up_miRNAs,select = c("miRNAs","count_genes"))
+colnames(regulated_up_miRNAs_select) = c("miRNAs","Down_regs_mRNAs")
+regulated_up_miRNAs_select$miRNAs = NULL
+
+regulated_up_miRNAs_selecta = regulated_up_miRNAs_select[order(-regulated_up_miRNAs_select$Down_regs_mRNAs),] 
+
+
+regulated_down_miRNAs_select = subset (regulated_down_miRNAs,select = c("miRNAs","count_genes"))
+regulated_down_miRNAs_select$miRNAs =  NULL
+colnames(regulated_up_miRNAs_select) = "Up_regs_mRNAs"
+
+counts = merge (regulated_up_miRNAs_select,regulated_down_miRNAs_select, by = "row.names", all = T)
+rownames(counts) = counts$Row.names
+counts$Row.names =  NULL
+colnames(counts) = c("UP_regs_mRNAs","Down_regs_mRNAs")
+newdata <- counts[order(counts$Down_regs_mRNAs, counts$UP_regs_mRNAs),]
+
+tiff("z:/Shared/miRNA_results/barplot1.tiff" , width = 2.5, height = 2.5, units = 'in', res = 600, pointsize = 8)
+
+barplot(t(as.matrix(newdata)), beside = TRUE,
+          col=c("Red","blue"), cex.names=.8,srt=45, border = c( "Red" , "blue"),cex.axis=0.5)
+ 
+
+abline(h=500, col = "black",lwd = 1  )
+
+dev.off()
+
+```
+
+```{r}
+ 
+all = read.table("Z:/Shared/Cancer_normalied/down_regs.txt", header = T, sep = "\t")
+numb = cbind(sapply(all, match, unique(unlist(all))))
+numb = as.data.frame(numb)
+rownames(numb) = NULL
+t = as.list(numb)
+m1 = make_comb_mat(t,mode = "intersect")
+UpSet(m1, comb_col = "darkblue", bg_col = c("#F0F0FF", "#FFF0F0"), bg_pt_col = "darkgray")
+
+
+
+
+```
+
+
+# Allelic imbalance
+
+```{r}
+upregs_super_regs = read.csv("z:/Shared/Alleic_imabalnce_super_Regs_miRNAs/upregs.csv", header = T, row.names = 1)
+
+tiff("super_regs_upregs.tiff" , width = 6, height = 4, units = 'in', res = 600)
+
+lgd = Legend(col_fun = col_fun, title = "Diff miRNA BS", legend_gp = gpar (font =4))
+col_fun = colorRamp2(c(-3,4), c("white", "cornflowerblue"))
+col_fun(seq(-3,4))
+h1<-Heatmap(
+     as.matrix(upregs_super_regs, ncol = 6),
+     col = col_fun,
+     border = TRUE , cluster_rows = FALSE, cluster_columns = FALSE, show_column_dend = FALSE, column_km = 1,row_gap = unit(0.5,"mm"),width = unit(1.5, "cm"),row_names_gp = gpar(fontsize = 4),height = unit (8,"cm"),column_names_gp = gpar (fontsize = 5), show_heatmap_legend = FALSE,row_title_gp = gpar(fontsize = 5))
+h1
+draw(lgd, x = unit(0.17, "npc"), y = unit(0.6, "npc"))
+
+dev.off()
+
+```
+
+
+
+
